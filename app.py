@@ -46,41 +46,170 @@ def dashboard():
     stats = {}
     try:
         with conn.cursor() as cur:
-            # Total books
-            cur.execute("SELECT COUNT(*) as count FROM Book")
-            stats['total_books'] = cur.fetchone()['count']
-            
-            # Total patrons
-            cur.execute("SELECT COUNT(*) as count FROM Patron")
-            stats['total_patrons'] = cur.fetchone()['count']
-            
-            # Current loans
-            cur.execute("SELECT COUNT(*) as count FROM vw_current_loans")
-            stats['current_loans'] = cur.fetchone()['count']
-            
-            # Overdue loans
-            cur.execute("SELECT COUNT(*) as count FROM vw_overdue_loans")
-            stats['overdue_loans'] = cur.fetchone()['count']
-            
-            # Total fines
+            # -------------------------------------------------
+            # Use updated_complex_query.sql "DASHBOARD MEGA SUMMARY"
+            # -------------------------------------------------
             cur.execute("""
-                SELECT COALESCE(SUM(unpaid_fines), 0) as total 
-                FROM vw_patron_fines_summary
+                SET @today := CURDATE();
             """)
-            stats['total_fines'] = cur.fetchone()['total'] or 0
-            
-            # Recent overdue loans
             cur.execute("""
-                SELECT loan_id, patron_name, title, due_ts
-                FROM vw_overdue_loans
-                ORDER BY due_ts
-                LIMIT 5
+                SET @last_7 := DATE_SUB(@today, INTERVAL 7 DAY);
             """)
-            stats['recent_overdue'] = cur.fetchall()
-            
+            cur.execute("""
+                SET @last_90 := DATE_SUB(@today, INTERVAL 90 DAY);
+            """)
+            cur.execute("""
+                WITH
+                BookStats AS (
+                  SELECT
+                    COUNT(*) AS total_books,
+                    COUNT(DISTINCT c.copy_id) AS total_copies,
+                    COUNT(DISTINCT bs.subject_id) AS total_subjects
+                  FROM Book b
+                  LEFT JOIN Copy c       ON b.isbn = c.isbn
+                  LEFT JOIN BookSubject bs ON b.isbn = bs.isbn
+                ),
+                PatronStats AS (
+                  SELECT
+                    COUNT(*) AS total_patrons,
+                    COUNT(DISTINCT l.patron_id) AS active_patrons_90d
+                  FROM Patron p
+                  LEFT JOIN Loan l
+                    ON p.patron_id = l.patron_id
+                   AND l.loan_ts >= @last_90
+                ),
+                LoanCore AS (
+                  SELECT
+                    l.loan_id,
+                    l.loan_ts,
+                    l.due_ts,
+                    l.return_ts,
+                    DATEDIFF(COALESCE(l.return_ts, @today), DATE(l.loan_ts)) AS duration_days
+                  FROM Loan l
+                ),
+                LoanStats AS (
+                  SELECT
+                    COUNT(*) AS total_loans,
+                    SUM(CASE WHEN return_ts IS NULL THEN 1 ELSE 0 END) AS current_loans,
+                    SUM(
+                      CASE
+                        WHEN return_ts IS NULL AND due_ts < @today THEN 1
+                        ELSE 0
+                      END
+                    ) AS overdue_loans,
+                    AVG(duration_days) AS avg_duration_days
+                  FROM LoanCore
+                ),
+                RecentLoanActivity AS (
+                  SELECT
+                    SUM(CASE WHEN DATE(loan_ts)   >= @last_7 THEN 1 ELSE 0 END) AS loans_last_7d,
+                    SUM(CASE WHEN DATE(return_ts) >= @last_7 THEN 1 ELSE 0 END) AS returns_last_7d
+                  FROM LoanCore
+                )
+                SELECT
+                  bs.total_books,
+                  bs.total_copies,
+                  bs.total_subjects,
+                  ps.total_patrons,
+                  ps.active_patrons_90d,
+                  ls.total_loans,
+                  ls.current_loans,
+                  ls.overdue_loans,
+                  ROUND(ls.avg_duration_days, 2) AS avg_duration_days,
+                  ra.loans_last_7d,
+                  ra.returns_last_7d
+                FROM BookStats bs
+                CROSS JOIN PatronStats ps
+                CROSS JOIN LoanStats   ls
+                CROSS JOIN RecentLoanActivity ra;
+            """)
+            summary = cur.fetchone() or {}
+            stats.update(summary)
+
+            # For compatibility with existing template keys
+            stats['total_books'] = stats.get('total_books', 0)
+            stats['total_patrons'] = stats.get('total_patrons', 0)
+            stats['current_loans'] = stats.get('current_loans', 0)
+            stats['overdue_loans'] = stats.get('overdue_loans', 0)
+
+            # -------------------------------------------------
+            # Use updated_complex_query.sql "DASHBOARD OVERDUE ALERT WITH RISK SCORE"
+            # -------------------------------------------------
+            cur.execute("SET @today := CURDATE();")
+            cur.execute("""
+                WITH PatronHistory AS (
+                  SELECT
+                    p.patron_id,
+                    COUNT(l.loan_id) AS all_loans,
+                    SUM(
+                      CASE
+                        WHEN l.return_ts IS NULL AND l.due_ts < @today THEN 1
+                        WHEN l.return_ts IS NOT NULL AND l.return_ts > l.due_ts THEN 1
+                        ELSE 0
+                      END
+                    ) AS overdue_or_late_loans
+                  FROM Patron p
+                  LEFT JOIN Loan l ON p.patron_id = l.patron_id
+                  GROUP BY p.patron_id
+                ),
+                PatronFineSummary AS (
+                  SELECT
+                    patron_id,
+                    COALESCE(SUM(amount), 0) AS total_fines,
+                    COALESCE(SUM(CASE WHEN status = 'Unpaid' THEN amount ELSE 0 END), 0) AS unpaid_fines
+                  FROM Fine
+                  GROUP BY patron_id
+                ),
+                OverdueLoans AS (
+                  SELECT
+                    l.loan_id,
+                    l.patron_id,
+                    l.copy_id,
+                    l.loan_ts,
+                    l.due_ts,
+                    l.return_ts,
+                    DATEDIFF(@today, DATE(l.due_ts)) AS days_overdue
+                  FROM Loan l
+                  WHERE l.return_ts IS NULL
+                    AND l.due_ts < @today
+                )
+                SELECT
+                  o.loan_id,
+                  o.patron_id,
+                  CONCAT(p.first_name, ' ', p.last_name) AS patron_name,
+                  b.title AS book_title,
+                  DATE(o.due_ts) AS due_date,
+                  o.days_overdue,
+                  ph.all_loans,
+                  ph.overdue_or_late_loans,
+                  pfs.unpaid_fines,
+                  (
+                    o.days_overdue * 1.0
+                    + ph.overdue_or_late_loans * 2.0
+                    + (pfs.unpaid_fines / 10.0)
+                  ) AS risk_score
+                FROM OverdueLoans o
+                JOIN Patron p ON o.patron_id = p.patron_id
+                JOIN Copy   c ON o.copy_id   = c.copy_id
+                JOIN Book   b ON c.isbn      = b.isbn
+                LEFT JOIN PatronHistory    ph  ON p.patron_id = ph.patron_id
+                LEFT JOIN PatronFineSummary pfs ON p.patron_id = pfs.patron_id
+                ORDER BY risk_score DESC, o.days_overdue DESC
+                LIMIT 10;
+            """)
+            stats['overdue_risk'] = cur.fetchall()
+
+            # Also compute total unpaid fines for display
+            cur.execute("""
+                SELECT COALESCE(SUM(amount), 0) AS total_unpaid
+                FROM Fine
+                WHERE status = 'Unpaid'
+            """)
+            row = cur.fetchone()
+            stats['total_fines'] = row['total_unpaid'] if row else 0
     finally:
         conn.close()
-    
+
     return render_template("dashboard.html", stats=stats)
 
 # -----------------------------
@@ -91,6 +220,10 @@ def books():
     search = request.args.get('search', '')
     subject = request.args.get('subject', '')
     
+    # Normalize filters
+    subject_id = int(subject) if subject and subject.isdigit() else None
+    search_term = search.strip() or None
+
     conn = get_connection()
     books = []
     subjects = []
@@ -101,68 +234,103 @@ def books():
             cur.execute("SELECT DISTINCT subject_id, name FROM Subject ORDER BY name")
             subjects = cur.fetchall()
             
-            # Get books with details
-            if subject:
-                sql = """
-                    SELECT DISTINCT
-                        b.isbn,
-                        b.title,
-                        b.pub_year,
-                        p.name AS publisher_name,
-                        GROUP_CONCAT(DISTINCT CONCAT(a.first_name, ' ', a.last_name) SEPARATOR ', ') AS authors,
-                        GROUP_CONCAT(DISTINCT s.name SEPARATOR ', ') AS subjects
-                    FROM Book b
-                    LEFT JOIN Publisher p ON b.publisher_id = p.publisher_id
-                    LEFT JOIN BookAuthor ba ON b.isbn = ba.isbn
-                    LEFT JOIN Author a ON ba.author_id = a.author_id
-                    LEFT JOIN BookSubject bs ON b.isbn = bs.isbn
-                    LEFT JOIN Subject s ON bs.subject_id = s.subject_id
-                    WHERE 1=1
-                """
-                params = []
-                
-                if search:
-                    sql += " AND (b.title LIKE %s OR b.isbn LIKE %s)"
-                    params.extend([f'%{search}%', f'%{search}%'])
-                
-                if subject:
-                    sql += " AND s.subject_id = %s"
-                    params.append(subject)
-                
-                sql += """
-                    GROUP BY b.isbn, b.title, b.pub_year, p.name
-                    ORDER BY b.title
-                """
-                cur.execute(sql, params)
-            else:
-                sql = """
-                    SELECT DISTINCT
-                        b.isbn,
-                        b.title,
-                        b.pub_year,
-                        p.name AS publisher_name,
-                        GROUP_CONCAT(DISTINCT CONCAT(a.first_name, ' ', a.last_name) SEPARATOR ', ') AS authors,
-                        GROUP_CONCAT(DISTINCT s.name SEPARATOR ', ') AS subjects
-                    FROM Book b
-                    LEFT JOIN Publisher p ON b.publisher_id = p.publisher_id
-                    LEFT JOIN BookAuthor ba ON b.isbn = ba.isbn
-                    LEFT JOIN Author a ON ba.author_id = a.author_id
-                    LEFT JOIN BookSubject bs ON b.isbn = bs.isbn
-                    LEFT JOIN Subject s ON bs.subject_id = s.subject_id
-                    WHERE 1=1
-                """
-                params = []
-                
-                if search:
-                    sql += " AND (b.title LIKE %s OR b.isbn LIKE %s)"
-                    params.extend([f'%{search}%', f'%{search}%'])
-                
-                sql += """
-                    GROUP BY b.isbn, b.title, b.pub_year, p.name
-                    ORDER BY b.title
-                """
-                cur.execute(sql, params)
-            
+            # Use updated_complex_query.sql "BOOKS CATALOG – ADVANCED SEARCH + SUBJECT RANK"
+            sql = """
+                WITH BookCore AS (
+                  SELECT
+                    b.isbn,
+                    b.title,
+                    b.pub_year,
+                    b.publisher_id,
+                    MIN(bs.subject_id) AS primary_subject_id
+                  FROM Book b
+                  LEFT JOIN BookSubject bs ON b.isbn = bs.isbn
+                  GROUP BY b.isbn, b.title, b.pub_year, b.publisher_id
+                ),
+                BookPopularity AS (
+                  SELECT
+                    bc.isbn,
+                    bc.primary_subject_id,
+                    COUNT(l.loan_id) AS times_loaned
+                  FROM BookCore bc
+                  LEFT JOIN Copy c ON bc.isbn = c.isbn
+                  LEFT JOIN Loan l ON c.copy_id = l.copy_id
+                  GROUP BY bc.isbn, bc.primary_subject_id
+                ),
+                BookAvailability AS (
+                  SELECT
+                    bc.isbn,
+                    COUNT(DISTINCT c.copy_id) AS total_copies,
+                    SUM(
+                      CASE
+                        WHEN l.loan_id IS NULL OR l.return_ts IS NOT NULL THEN 1
+                        ELSE 0
+                      END
+                    ) AS available_copies
+                  FROM BookCore bc
+                  LEFT JOIN Copy c ON bc.isbn = c.isbn
+                  LEFT JOIN Loan l ON c.copy_id = l.copy_id
+                                    AND l.return_ts IS NULL
+                  GROUP BY bc.isbn
+                ),
+                BookDetail AS (
+                  SELECT
+                    bc.isbn,
+                    bc.title,
+                    bc.pub_year,
+                    bc.publisher_id,
+                    bc.primary_subject_id,
+                    GROUP_CONCAT(DISTINCT CONCAT(a.first_name, ' ', a.last_name)
+                                 ORDER BY a.last_name SEPARATOR ', ') AS authors,
+                    GROUP_CONCAT(DISTINCT s.name
+                                 ORDER BY s.name SEPARATOR ', ') AS subjects
+                  FROM BookCore bc
+                  LEFT JOIN BookAuthor ba   ON bc.isbn = ba.isbn
+                  LEFT JOIN Author a        ON ba.author_id = a.author_id
+                  LEFT JOIN BookSubject bs2 ON bc.isbn = bs2.isbn
+                  LEFT JOIN Subject s       ON bs2.subject_id = s.subject_id
+                  GROUP BY bc.isbn, bc.title, bc.pub_year, bc.publisher_id, bc.primary_subject_id
+                )
+                SELECT
+                  bd.isbn,
+                  bd.title,
+                  bd.pub_year,
+                  pub.name AS publisher_name,
+                  bd.authors,
+                  bd.subjects,
+                  COALESCE(bp.times_loaned, 0) AS times_loaned,
+                  ba.total_copies,
+                  ba.available_copies,
+                  s_main.name AS primary_subject,
+                  RANK() OVER (
+                    PARTITION BY bd.primary_subject_id
+                    ORDER BY COALESCE(bp.times_loaned, 0) DESC, bd.title
+                  ) AS subject_popularity_rank
+                FROM BookDetail bd
+                LEFT JOIN Publisher pub ON bd.publisher_id     = pub.publisher_id
+                LEFT JOIN BookPopularity  bp ON bd.isbn        = bp.isbn
+                LEFT JOIN BookAvailability ba ON bd.isbn       = ba.isbn
+                LEFT JOIN Subject s_main  ON bd.primary_subject_id = s_main.subject_id
+                WHERE
+                  (%s IS NULL OR %s = ''
+                   OR bd.title LIKE CONCAT('%%', %s, '%%')
+                   OR bd.isbn  LIKE CONCAT('%%', %s, '%%')
+                  )
+                  AND (
+                    %s IS NULL
+                    OR bd.primary_subject_id = %s
+                  )
+                ORDER BY
+                  COALESCE(bp.times_loaned, 0) DESC,
+                  bd.title;
+            """
+            # parameters: search_term x4, subject_id x2 (MySQL will handle NULL)
+            params = [
+                search_term, search_term or '',
+                search_term or '', search_term or '',
+                subject_id, subject_id
+            ]
+            cur.execute(sql, params)
             books = cur.fetchall()
     finally:
         conn.close()
@@ -242,24 +410,64 @@ def patrons():
 
         return redirect(url_for("patrons"))
 
-    # GET: show list of patrons with fines
+    # GET: show list of patrons with activity & risk profile
     conn = get_connection()
     patrons = []
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT 
+                WITH LoanAgg AS (
+                  SELECT
                     p.patron_id,
-                    p.first_name,
-                    p.last_name,
-                    p.email,
-                    p.patron_type,
-                    p.balance,
-                    COALESCE(ps.total_fines, 0) as total_fines,
-                    COALESCE(ps.unpaid_fines, 0) as unpaid_fines
+                    COUNT(l.loan_id) AS total_loans,
+                    SUM(CASE WHEN l.return_ts IS NULL THEN 1 ELSE 0 END) AS active_loans,
+                    SUM(CASE WHEN l.return_ts IS NULL AND l.due_ts < CURDATE() THEN 1 ELSE 0 END)
+                      AS overdue_loans,
+                    MAX(l.loan_ts) AS last_loan_ts
+                  FROM Patron p
+                  LEFT JOIN Loan l ON p.patron_id = l.patron_id
+                  GROUP BY p.patron_id
+                ),
+                FineAgg AS (
+                  SELECT
+                    patron_id,
+                    COALESCE(SUM(amount), 0) AS total_fines,
+                    COALESCE(SUM(CASE WHEN status = 'Unpaid' THEN amount ELSE 0 END), 0) AS unpaid_fines
+                  FROM Fine
+                  GROUP BY patron_id
+                )
+                SELECT
+                  p.patron_id,
+                  p.first_name,
+                  p.last_name,
+                  p.email,
+                  p.patron_type,
+                  p.balance,
+                  COALESCE(la.total_loans, 0) AS total_loans,
+                  COALESCE(la.active_loans, 0) AS active_loans,
+                  COALESCE(la.overdue_loans, 0) AS overdue_loans,
+                  la.last_loan_ts,
+                  COALESCE(fa.total_fines, 0)   AS total_fines,
+                  COALESCE(fa.unpaid_fines, 0)  AS unpaid_fines,
+                  CASE
+                    WHEN COALESCE(fa.unpaid_fines, 0) >= 50
+                       OR COALESCE(la.overdue_loans, 0) >= 3
+                    THEN 'HIGH'
+                    WHEN COALESCE(fa.unpaid_fines, 0) BETWEEN 10 AND 49
+                       OR COALESCE(la.overdue_loans, 0) BETWEEN 1 AND 2
+                    THEN 'MEDIUM'
+                    ELSE 'LOW'
+                  END AS risk_level
                 FROM Patron p
-                LEFT JOIN vw_patron_fines_summary ps ON p.patron_id = ps.patron_id
-                ORDER BY p.patron_id
+                LEFT JOIN LoanAgg la ON p.patron_id = la.patron_id
+                LEFT JOIN FineAgg fa ON p.patron_id = fa.patron_id
+                ORDER BY
+                  CASE risk_level
+                    WHEN 'HIGH' THEN 1
+                    WHEN 'MEDIUM' THEN 2
+                    ELSE 3
+                  END,
+                  p.patron_id
             """)
             patrons = cur.fetchall()
     finally:
@@ -321,26 +529,79 @@ def loans():
     
     try:
         with conn.cursor() as cur:
+            # Map filter_type to status_filter used in updated_complex_query.sql
+            status_filter = 'ALL'
             if filter_type == 'current':
-                cur.execute("""
-                    SELECT loan_id, copy_id, barcode, isbn, title, patron_id, patron_name, loan_ts, due_ts
-                    FROM vw_current_loans
-                    ORDER BY due_ts
-                """)
+                status_filter = 'CURRENT'
             elif filter_type == 'overdue':
-                cur.execute("""
-                    SELECT loan_id, copy_id, barcode, isbn, title, patron_id, patron_name, loan_ts, due_ts
-                    FROM vw_overdue_loans
-                    ORDER BY due_ts
-                """)
-            else:
-                cur.execute("""
-                    SELECT loan_id, patron_id, patron_name, copy_id, barcode, isbn, title, loan_ts, due_ts, return_ts, loan_status
-                    FROM vw_patron_loans_with_status
-                    ORDER BY loan_ts DESC
-                    LIMIT 100
-                """)
-            
+                status_filter = 'OVERDUE'
+            elif filter_type == 'returned':
+                status_filter = 'RETURNED'
+
+            sql = """
+                WITH LoanEnriched AS (
+                  SELECT
+                    l.loan_id,
+                    l.copy_id,
+                    l.patron_id,
+                    c.barcode,
+                    b.isbn,
+                    b.title,
+                    br.branch_id,
+                    br.name AS branch_name,
+                    l.loan_ts,
+                    l.due_ts,
+                    l.return_ts,
+                    CASE
+                      WHEN l.return_ts IS NOT NULL THEN 'RETURNED'
+                      WHEN l.due_ts < CURDATE()   THEN 'OVERDUE'
+                      ELSE 'CURRENT'
+                    END AS status,
+                    DATEDIFF(COALESCE(l.return_ts, CURDATE()), DATE(l.loan_ts)) AS duration_days
+                  FROM Loan l
+                  JOIN Copy  c ON l.copy_id   = c.copy_id
+                  JOIN Book  b ON c.isbn      = b.isbn
+                  JOIN Branch br ON c.branch_id = br.branch_id
+                ),
+                PatronLoanStats AS (
+                  SELECT
+                    patron_id,
+                    AVG(duration_days) AS avg_duration_per_patron
+                  FROM LoanEnriched
+                  GROUP BY patron_id
+                )
+                SELECT
+                  le.loan_id,
+                  le.patron_id,
+                  CONCAT(p.first_name, ' ', p.last_name) AS patron_name,
+                  le.barcode,
+                  le.isbn,
+                  le.title,
+                  le.branch_name,
+                  le.loan_ts,
+                  le.due_ts,
+                  le.return_ts,
+                  le.status,
+                  le.duration_days,
+                  pls.avg_duration_per_patron,
+                  CASE
+                    WHEN le.duration_days > pls.avg_duration_per_patron THEN 'LONGER THAN USUAL'
+                    WHEN le.duration_days < pls.avg_duration_per_patron THEN 'SHORTER THAN USUAL'
+                    ELSE 'TYPICAL'
+                  END AS duration_vs_usual
+                FROM LoanEnriched le
+                JOIN Patron p ON le.patron_id = p.patron_id
+                LEFT JOIN PatronLoanStats pls ON le.patron_id = pls.patron_id
+                WHERE
+                  %s = 'ALL'
+                  OR (%s = 'CURRENT'  AND le.status = 'CURRENT')
+                  OR (%s = 'OVERDUE'  AND le.status = 'OVERDUE')
+                  OR (%s = 'RETURNED' AND le.status = 'RETURNED')
+                ORDER BY le.loan_ts DESC
+                LIMIT 200;
+            """
+            params = [status_filter, status_filter, status_filter, status_filter]
+            cur.execute(sql, params)
             loans = cur.fetchall()
     finally:
         conn.close()
@@ -760,19 +1021,42 @@ def monthly_loans():
     
     try:
         with conn.cursor() as cur:
+            # Use updated_complex_query.sql "STATISTICS – MONTHLY LOAN TRENDS BY PATRON TYPE"
             cur.execute("""
+                WITH MonthlyTypeLoans AS (
+                  SELECT
+                    DATE_FORMAT(l.loan_ts, '%%Y-%%m') AS loan_month,
+                    p.patron_type
+                  FROM Loan l
+                  JOIN Patron p ON l.patron_id = p.patron_id
+                  WHERE l.loan_ts IS NOT NULL
+                ),
+                MonthlyAgg AS (
+                  SELECT
+                    loan_month,
+                    SUM(CASE WHEN patron_type = 'Student' THEN 1 ELSE 0 END) AS student_loans,
+                    SUM(CASE WHEN patron_type = 'Faculty' THEN 1 ELSE 0 END) AS faculty_loans,
+                    SUM(CASE WHEN patron_type = 'Staff'   THEN 1 ELSE 0 END) AS staff_loans,
+                    SUM(CASE WHEN patron_type = 'Alumni'  THEN 1 ELSE 0 END) AS alumni_loans,
+                    SUM(CASE
+                          WHEN patron_type NOT IN ('Student','Faculty','Staff','Alumni')
+                          THEN 1 ELSE 0
+                        END) AS other_loans,
+                    COUNT(*) AS total_loans
+                  FROM MonthlyTypeLoans
+                  GROUP BY loan_month
+                )
                 SELECT
-                  DATE_FORMAT(loan_ts, '%Y-%m') AS loan_month,
-                  SUM(CASE WHEN p.patron_type = 'Student' THEN 1 ELSE 0 END) AS student_loans,
-                  SUM(CASE WHEN p.patron_type = 'Faculty' THEN 1 ELSE 0 END) AS faculty_loans,
-                  SUM(CASE WHEN p.patron_type = 'Staff' THEN 1 ELSE 0 END) AS staff_loans,
-                  SUM(CASE WHEN p.patron_type = 'Alumni' THEN 1 ELSE 0 END) AS alumni_loans,
-                  COUNT(*) AS total_loans
-                FROM Loan l
-                JOIN Patron p ON l.patron_id = p.patron_id
-                WHERE loan_ts IS NOT NULL
-                GROUP BY loan_month
-                ORDER BY loan_month DESC
+                  loan_month,
+                  student_loans,
+                  faculty_loans,
+                  staff_loans,
+                  alumni_loans,
+                  other_loans,
+                  total_loans,
+                  SUM(total_loans) OVER (ORDER BY loan_month) AS running_total_loans
+                FROM MonthlyAgg
+                ORDER BY loan_month;
             """)
             monthly_data = cur.fetchall()
     finally:

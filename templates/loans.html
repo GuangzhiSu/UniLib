@@ -31,15 +31,16 @@
                 <tr>
                     <th>Loan ID</th>
                     <th>Patron</th>
+                    <th>Branch</th>
                     <th>Barcode</th>
                     <th>ISBN</th>
                     <th>Title</th>
                     <th>Loan Date</th>
                     <th>Due Date</th>
-                    {% if filter_type == 'all' %}
                     <th>Return Date</th>
                     <th>Status</th>
-                    {% endif %}
+                    <th>Duration (days)</th>
+                    <th>Vs Usual</th>
                 </tr>
             </thead>
             <tbody>
@@ -55,6 +56,7 @@
                             ID: {{ loan.patron_id }}
                         {% endif %}
                     </td>
+                    <td>{{ loan.branch_name }}</td>
                     <td>{{ loan.barcode }}</td>
                     <td>{{ loan.isbn }}</td>
                     <td><strong>{{ loan.title }}</strong></td>
@@ -62,27 +64,24 @@
                     <td>
                         {% if loan.due_ts %}
                             {{ loan.due_ts | dateformat }}
-                            {% if filter_type == 'overdue' %}
-                                <span class="badge badge-danger">Overdue</span>
-                            {% endif %}
                         {% else %}
                             N/A
                         {% endif %}
                     </td>
-                    {% if filter_type == 'all' %}
                     <td>{{ loan.return_ts | dateformat if loan.return_ts else '-' }}</td>
                     <td>
-                        {% if loan.loan_status == 'Returned' %}
+                        {% if loan.status == 'RETURNED' %}
                             <span class="badge badge-success">Returned</span>
-                        {% elif loan.loan_status == 'Overdue' %}
+                        {% elif loan.status == 'OVERDUE' %}
                             <span class="badge badge-danger">Overdue</span>
-                        {% elif loan.loan_status == 'On loan' %}
+                        {% elif loan.status == 'CURRENT' %}
                             <span class="badge badge-warning">On Loan</span>
                         {% else %}
-                            <span class="badge badge-info">{{ loan.loan_status or 'N/A' }}</span>
+                            <span class="badge badge-info">{{ loan.status or 'N/A' }}</span>
                         {% endif %}
                     </td>
-                    {% endif %}
+                    <td>{{ loan.duration_days }}</td>
+                    <td>{{ loan.duration_vs_usual }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

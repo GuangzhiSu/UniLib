@@ -22,8 +22,13 @@
                     <th>Email</th>
                     <th>Type</th>
                     <th>Balance</th>
+                    <th>Total Loans</th>
+                    <th>Active Loans</th>
+                    <th>Overdue Loans</th>
+                    <th>Last Loan</th>
                     <th>Total Fines</th>
                     <th>Unpaid Fines</th>
+                    <th>Risk Level</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -35,12 +40,31 @@
                     <td>{{ p.email or 'N/A' }}</td>
                     <td><span class="badge badge-info">{{ p.patron_type }}</span></td>
                     <td>${{ "%.2f"|format(p.balance) }}</td>
+                    <td>{{ p.total_loans }}</td>
+                    <td>{{ p.active_loans }}</td>
+                    <td>
+                        {% if p.overdue_loans and p.overdue_loans > 0 %}
+                            <span class="badge badge-danger">{{ p.overdue_loans }}</span>
+                        {% else %}
+                            0
+                        {% endif %}
+                    </td>
+                    <td>{{ p.last_loan_ts | dateformat if p.last_loan_ts else 'N/A' }}</td>
                     <td>${{ "%.2f"|format(p.total_fines or 0) }}</td>
                     <td>
                         {% if p.unpaid_fines and p.unpaid_fines > 0 %}
                             <span class="badge badge-danger">${{ "%.2f"|format(p.unpaid_fines) }}</span>
                         {% else %}
                             <span class="badge badge-success">$0.00</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if p.risk_level == 'HIGH' %}
+                            <span class="badge badge-danger">HIGH</span>
+                        {% elif p.risk_level == 'MEDIUM' %}
+                            <span class="badge badge-warning">MEDIUM</span>
+                        {% else %}
+                            <span class="badge badge-success">LOW</span>
                         {% endif %}
                     </td>
                     <td>

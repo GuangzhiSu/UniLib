@@ -14,8 +14,16 @@
         <div class="stat-label">Total Books</div>
     </div>
     <div class="stat-card">
+        <div class="stat-value">{{ stats.total_copies }}</div>
+        <div class="stat-label">Total Copies</div>
+    </div>
+    <div class="stat-card">
         <div class="stat-value">{{ stats.total_patrons }}</div>
         <div class="stat-label">Total Patrons</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.active_patrons_90d }}</div>
+        <div class="stat-label">Active Patrons (90 days)</div>
     </div>
     <div class="stat-card">
         <div class="stat-value">{{ stats.current_loans }}</div>
@@ -29,30 +37,52 @@
         <div class="stat-value">${{ "%.2f"|format(stats.total_fines) }}</div>
         <div class="stat-label">Total Fines</div>
     </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.loans_last_7d }}</div>
+        <div class="stat-label">Loans (Last 7 days)</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.returns_last_7d }}</div>
+        <div class="stat-label">Returns (Last 7 days)</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.avg_duration_days }}</div>
+        <div class="stat-label">Avg Loan Duration (days)</div>
+    </div>
 </div>
 
 {% if stats.overdue_loans > 0 %}
 <div class="card">
     <div class="card-header">
-        <h2>⚠️ Overdue Loans Alert</h2>
+        <h2>⚠️ Overdue Loans Risk Alert</h2>
     </div>
     <div class="table-container">
         <table>
             <thead>
                 <tr>
                     <th>Loan ID</th>
+                    <th>Patron ID</th>
                     <th>Patron</th>
                     <th>Book</th>
                     <th>Due Date</th>
+                    <th>Days Overdue</th>
+                    <th>Past Overdue/Late</th>
+                    <th>Unpaid Fines</th>
+                    <th>Risk Score</th>
                 </tr>
             </thead>
             <tbody>
-                {% for loan in stats.recent_overdue %}
+                {% for loan in stats.overdue_risk %}
                 <tr>
                     <td>{{ loan.loan_id }}</td>
+                    <td>{{ loan.patron_id }}</td>
                     <td>{{ loan.patron_name }}</td>
-                    <td>{{ loan.title }}</td>
-                    <td>{{ loan.due_ts | dateformat }}</td>
+                    <td>{{ loan.book_title }}</td>
+                    <td>{{ loan.due_date | dateformat }}</td>
+                    <td>{{ loan.days_overdue }}</td>
+                    <td>{{ loan.overdue_or_late_loans }}</td>
+                    <td>${{ "%.2f"|format(loan.unpaid_fines or 0) }}</td>
+                    <td><strong>{{ "%.1f"|format(loan.risk_score or 0) }}</strong></td>
                 </tr>
                 {% endfor %}
             </tbody>

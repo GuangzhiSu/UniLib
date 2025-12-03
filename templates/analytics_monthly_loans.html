@@ -22,7 +22,9 @@
                     <th>Faculty Loans</th>
                     <th>Staff Loans</th>
                     <th>Alumni Loans</th>
+                    <th>Other Loans</th>
                     <th>Total Loans</th>
+                    <th>Running Total</th>
                 </tr>
             </thead>
             <tbody>
@@ -33,7 +35,9 @@
                     <td><span class="badge badge-warning">{{ m.faculty_loans }}</span></td>
                     <td><span class="badge badge-success">{{ m.staff_loans }}</span></td>
                     <td><span class="badge badge-danger">{{ m.alumni_loans }}</span></td>
+                    <td><span class="badge badge-secondary">{{ m.other_loans }}</span></td>
                     <td><strong>{{ m.total_loans }}</strong></td>
+                    <td>{{ m.running_total_loans }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

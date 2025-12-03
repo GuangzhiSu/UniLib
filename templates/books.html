@@ -38,6 +38,10 @@
                     <th>Publisher</th>
                     <th>Authors</th>
                     <th>Subjects</th>
+                    <th>Times Loaned</th>
+                    <th>Copies (Avail / Total)</th>
+                    <th>Primary Subject</th>
+                    <th>Subject Rank</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -50,6 +54,16 @@
                     <td>{{ book.publisher_name or 'N/A' }}</td>
                     <td>{{ book.authors or 'N/A' }}</td>
                     <td>{{ book.subjects or 'N/A' }}</td>
+                    <td>
+                        <span class="badge badge-info">
+                            {{ book.times_loaned }} loans
+                        </span>
+                    </td>
+                    <td>
+                        {{ book.available_copies or 0 }} / {{ book.total_copies or 0 }}
+                    </td>
+                    <td>{{ book.primary_subject or 'N/A' }}</td>
+                    <td>#{{ book.subject_popularity_rank }}</td>
                     <td>
                         <a href="{{ url_for('book_detail', isbn=book.isbn) }}" class="btn btn-sm btn-primary">Details</a>
                     </td>
