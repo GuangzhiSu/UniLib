@@ -634,49 +634,81 @@ def fines():
 # Statistics
 # -----------------------------
 @app.route("/statistics")
+@app.route("/statistics")
 def statistics():
+    mode = request.args.get('mode', 'overall')
+
     conn = get_connection()
-    top_books = []
-    top_patrons = []
-    
+    books = []
+
     try:
-        with conn.cursor() as cur:
-            # Top 10 most popular books
-            cur.execute("""
-                SELECT b.isbn, b.title, COUNT(l.loan_id) AS times_loaned
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+
+            if mode == 'overall':
+                sql = """
+                SELECT
+                    RANK() OVER (ORDER BY total_loans DESC, b.title) AS ranking,
+                    b.title,
+                    GROUP_CONCAT(DISTINCT s.name ORDER BY s.name SEPARATOR ', ') AS subject,
+                    total_loans,
+                    total_copies,
+                    checkout_rate,
+                    GROUP_CONCAT(DISTINCT s.name ORDER BY s.name SEPARATOR ', ') AS subjects
+                FROM (
+                    SELECT
+                        b.isbn,
+                        b.title,
+                        COUNT(l.loan_id) AS total_loans,
+                        COUNT(DISTINCT c.copy_id) AS total_copies,
+                        CONCAT(ROUND(100.0 * SUM(CASE WHEN l.return_ts IS NULL THEN 1 ELSE 0 END) 
+                              / NULLIF(COUNT(DISTINCT c.copy_id), 0), 1), '%') AS checkout_rate
+                    FROM Book b
+                    LEFT JOIN Copy c ON b.isbn = c.isbn
+                    LEFT JOIN Loan l ON c.copy_id = l.copy_id
+                    GROUP BY b.isbn, b.title
+                ) AS book_stats
+                JOIN Book b ON book_stats.isbn = b.isbn
+                LEFT JOIN BookSubject bs ON b.isbn = bs.isbn
+                LEFT JOIN Subject s ON bs.subject_id = s.subject_id
+                GROUP BY b.isbn, b.title, total_loans, total_copies, checkout_rate
+                ORDER BY ranking
+                LIMIT 10
+                """
+                cur.execute(sql)
+
+            else:
+                subject_id = int(mode) if mode.isdigit() else 1
+                sql = f"""
+                SELECT
+                    RANK() OVER (ORDER BY COUNT(l.loan_id) DESC, b.title) AS ranking,
+                    b.title,
+                    s.name AS subject,
+                    COUNT(l.loan_id) AS total_loans,
+                    COUNT(DISTINCT c.copy_id) AS total_copies,
+                    CONCAT(ROUND(100.0 * SUM(CASE WHEN l.return_ts IS NULL THEN 1 ELSE 0 END) 
+                          / NULLIF(COUNT(DISTINCT c.copy_id), 0), 1), '%') AS checkout_rate,
+                    s.name AS subjects
                 FROM Book b
-                JOIN Copy c ON b.isbn = c.isbn
-                JOIN Loan l ON c.copy_id = l.copy_id
-                GROUP BY b.isbn, b.title
-                ORDER BY times_loaned DESC, b.title
+                LEFT JOIN Copy c ON b.isbn = c.isbn
+                LEFT JOIN Loan l ON c.copy_id = l.copy_id
+                INNER JOIN BookSubject bs ON b.isbn = bs.isbn
+                INNER JOIN Subject s ON bs.subject_id = s.subject_id
+                WHERE s.subject_id = {subject_id}
+                GROUP BY b.isbn, b.title, s.name
+                ORDER BY ranking
                 LIMIT 10
-            """)
-            top_books = cur.fetchall()
-            
-            # Top 10 patrons by loans
-            cur.execute("""
-                SELECT p.patron_id,
-                       CONCAT(p.first_name, ' ', p.last_name) AS patron_name,
-                       COUNT(l.loan_id) AS loan_count
-                FROM Patron p
-                LEFT JOIN Loan l ON p.patron_id = l.patron_id
-                GROUP BY p.patron_id, patron_name
-                ORDER BY loan_count DESC
-                LIMIT 10
-            """)
-            top_patrons = cur.fetchall()
+                """
+                cur.execute(sql)
+
+            books = cur.fetchall()
+
+    except Exception as e:
+        print(f"Error: {e}")
+        flash("Failed to load rankings", "danger")
     finally:
         conn.close()
-    
-    return render_template("statistics.html", top_books=top_books, top_patrons=top_patrons)
 
-# -----------------------------
-# Analytics - Complex Queries
-# -----------------------------
-@app.route("/analytics")
-def analytics():
-    """Main analytics page with links to complex queries"""
-    return render_template("analytics.html")
+    return render_template("statistics.html", books=books, current_mode=mode)
 
 # -----------------------------
 # Q12: Window Functions - Rank patrons by fines within each type
