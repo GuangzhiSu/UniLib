@@ -1,93 +1,79 @@
 {% extends "base.html" %}
-
-{% block title %}Statistics - UniLibPlus{% endblock %}
+{% block title %}Statistics - UniLib+{% endblock %}
 
 {% block content %}
-<div class="page-header">
-    <h1>📈 Statistics</h1>
-    <p>Library usage analytics</p>
-</div>
+<div class="container py-5">
+    <h1 class="text-center display-5 fw-bold text-primary mb-5">Library Statistics</h1>
 
-<div class="card">
-    <div class="card-header">
-        <h2>📚 Top 10 Popular Books</h2>
-        <p>Sorted by number of loans</p>
+    <!-- subject -->
+    <div class="text-center mb-5">
+        <div class="btn-group flex-wrap gap-2" role="group">
+            <a href="{{ url_for('statistics') }}" 
+               class="btn btn-lg {{ 'btn-primary active' if current_mode == 'overall' else 'btn-outline-primary' }}">
+                Overall Top 10
+            </a>
+            {% set subjects = [(1,'Computer Science'),(2,'Data Science'),(3,'Literature'),(4,'History'),
+                               (5,'Biology'),(6,'Economics'),(7,'Mathematics'),(8,'Philosophy'),
+                               (9,'Artificial Intelligence'),(10,'Sociology'),(11,'Law'),
+                               (12,'Business & Management'),(13,'Environmental Studies'),(14,'Psychology')] %}
+            {% for sid, name in subjects %}
+            <a href="{{ url_for('statistics', subject=sid) }}"
+               class="btn btn-lg {{ 'btn-success active' if current_mode == sid|string else 'btn-outline-success' }}">
+                {{ name }}
+            </a>
+            {% endfor %}
+        </div>
     </div>
-    {% if top_books %}
-    <div class="table-container">
-        <table>
-            <thead>
-                <tr>
-                    <th>Rank</th>
-                    <th>ISBN</th>
-                    <th>Title</th>
-                    <th>Times Loaned</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for book in top_books %}
-                <tr>
-                    <td><strong>#{{ loop.index }}</strong></td>
-                    <td>{{ book.isbn }}</td>
-                    <td>
-                        <a href="{{ url_for('book_detail', isbn=book.isbn) }}">
-                            <strong>{{ book.title }}</strong>
-                        </a>
-                    </td>
-                    <td>
-                        <span class="badge badge-info">{{ book.times_loaned }} times</span>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% else %}
-    <div class="empty-state">
-        <p>No data available</p>
-    </div>
-    {% endif %}
-</div>
 
-<div class="card">
-    <div class="card-header">
-        <h2>👥 Top 10 Active Patrons</h2>
-        <p>Sorted by number of loans</p>
+    <div class="row">
+        <!-- book ranking -->
+        <div class="col-lg-8">
+            <h2 class="text-center mb-4 text-primary">{{ current_subject_name }}</h2>
+            <div class="card shadow">
+                <div class="card-body p-0">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-primary text-white text-center">
+                            <tr>
+                                <th width="80">Rank</th>
+                                <th>Title</th>
+                                <th width="120">Times Loaned</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for i, book in enumerate(top_books, 1) %}
+                            <tr class="{% if i <= 3 %}table-warning fw-bold{% endif %}">
+                                <td class="text-center"><strong>#{{ i }}</strong></td>
+                                <td class="fw-bold">{{ book.title }}</td>
+                                <td class="text-center">
+                                    <span class="badge bg-success fs-5">{{ book.times_loaned }}</span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- patron ranking -->
+        <div class="col-lg-4">
+            <div class="card shadow">
+                <div class="card-header bg-success text-white text-center">
+                    <h5 class="mb-0">Most Active Readers</h5>
+                </div>
+                <div class="card-body">
+                    <ol class="list-group list-group-numbered">
+                        {% for p in top_patrons %}
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            {{ p.patron_name }}
+                            <span class="badge bg-primary rounded-pill">{{ p.loan_count }}</span>
+                        </li>
+                        {% endfor %}
+                    </ol>
+                </div>
+            </div>
+        </div>
     </div>
-    {% if top_patrons %}
-    <div class="table-container">
-        <table>
-            <thead>
-                <tr>
-                    <th>Rank</th>
-                    <th>Patron ID</th>
-                    <th>Name</th>
-                    <th>Loan Count</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for patron in top_patrons %}
-                <tr>
-                    <td><strong>#{{ loop.index }}</strong></td>
-                    <td>{{ patron.patron_id }}</td>
-                    <td>
-                        <a href="{{ url_for('patron_detail', patron_id=patron.patron_id) }}">
-                            <strong>{{ patron.patron_name }}</strong>
-                        </a>
-                    </td>
-                    <td>
-                        <span class="badge badge-success">{{ patron.loan_count }} times</span>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% else %}
-    <div class="empty-state">
-        <p>No data available</p>
-    </div>
-    {% endif %}
 </div>
 {% endblock %}
 
