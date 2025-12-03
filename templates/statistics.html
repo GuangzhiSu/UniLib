@@ -1,93 +1,85 @@
 {% extends "base.html" %}
-
-{% block title %}Statistics - UniLibPlus{% endblock %}
+{% block title %}Statistics - UniLib+{% endblock %}
 
 {% block content %}
-<div class="page-header">
-    <h1>📈 Statistics</h1>
-    <p>Library usage analytics</p>
-</div>
+<div class="container py-5">
+    <h1 class="text-center display-5 fw-bold text-primary mb-4">Book Popularity Rankings</h1>
+    <p class="text-center lead text-muted mb-5">Real-time borrowing statistics across the library</p>
 
-<div class="card">
-    <div class="card-header">
-        <h2>📚 Top 10 Popular Books</h2>
-        <p>Sorted by number of loans</p>
+    <div class="text-center mb-5">
+        <div class="btn-group flex-wrap justify-content-center gap-2" role="group">
+            <a href="{{ url_for('statistics', mode='overall') }}"
+               class="btn btn-lg {{ 'btn-primary active' if current_mode == 'overall' else 'btn-outline-primary' }}">
+                Overall Top 10
+            </a>
+
+            {% set subjects = [
+                (1,'Computer Science'), (2,'Data Science'), (3,'Literature'), (4,'History'),
+                (5,'Biology'), (6,'Economics'), (7,'Mathematics'), (8,'Philosophy'),
+                (9,'Artificial Intelligence'), (10,'Sociology'), (11,'Law'),
+                (12,'Business & Management'), (13,'Environmental Studies'), (14,'Psychology')
+            ] %}
+
+            {% for sid, name in subjects %}
+            <a href="{{ url_for('statistics', mode=sid) }}"
+               class="btn btn-lg {{ 'btn-success active' if current_mode == sid|string else 'btn-outline-success' }}">
+                {{ name }}
+            </a>
+            {% endfor %}
+        </div>
     </div>
-    {% if top_books %}
-    <div class="table-container">
-        <table>
-            <thead>
-                <tr>
-                    <th>Rank</th>
-                    <th>ISBN</th>
-                    <th>Title</th>
-                    <th>Times Loaned</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for book in top_books %}
-                <tr>
-                    <td><strong>#{{ loop.index }}</strong></td>
-                    <td>{{ book.isbn }}</td>
-                    <td>
-                        <a href="{{ url_for('book_detail', isbn=book.isbn) }}">
-                            <strong>{{ book.title }}</strong>
-                        </a>
-                    </td>
-                    <td>
-                        <span class="badge badge-info">{{ book.times_loaned }} times</span>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+
+    {% if books %}
+    <div class="card shadow-lg border-0">
+        <div class="card-header bg-primary text-white text-center py-4">
+            <h3 class="mb-0">
+                {% if current_mode == 'overall' %}
+                    Global Top 10 Most Borrowed Books
+                {% else %}
+                    Top 10 in {{ books[0].subject }}
+                {% endif %}
+            </h3>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0 align-middle">
+                    <thead class="table-primary text-white text-center">
+                        <tr>
+                            <th width="80">Rank</th>
+                            <th>Title</th>
+                            <th width="180">Subject</th>
+                            <th width="120">Loans</th>
+                            <th width="100">Copies</th>
+                            <th width="130">Checkout Rate</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for b in books %}
+                        <tr class="{% if loop.index <= 3 %}table-warning fw-bold{% endif %}">
+                            <td class="text-center">
+                                <span class="badge bg-light text-primary fs-5">#{{ b.ranking }}</span>
+                            </td>
+                            <td class="fw-bold">{{ b.title }}</td>
+                            <td><small class="text-muted">{{ b.subject }}</small></td>
+                            <td class="text-center"><span class="badge bg-success fs-6">{{ b.total_loans }}</span></td>
+                            <td class="text-center">{{ b.total_copies }}</td>
+                            <td class="text-center">
+                                {% set rate = b.checkout_rate|replace('%','')|float %}
+                                <span class="badge fs-6 {{ 'bg-danger' if rate >= 100 else 'bg-warning' if rate >= 80 else 'bg-info' }}">
+                                    {{ b.checkout_rate }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
     {% else %}
-    <div class="empty-state">
-        <p>No data available</p>
-    </div>
-    {% endif %}
-</div>
-
-<div class="card">
-    <div class="card-header">
-        <h2>👥 Top 10 Active Patrons</h2>
-        <p>Sorted by number of loans</p>
-    </div>
-    {% if top_patrons %}
-    <div class="table-container">
-        <table>
-            <thead>
-                <tr>
-                    <th>Rank</th>
-                    <th>Patron ID</th>
-                    <th>Name</th>
-                    <th>Loan Count</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for patron in top_patrons %}
-                <tr>
-                    <td><strong>#{{ loop.index }}</strong></td>
-                    <td>{{ patron.patron_id }}</td>
-                    <td>
-                        <a href="{{ url_for('patron_detail', patron_id=patron.patron_id) }}">
-                            <strong>{{ patron.patron_name }}</strong>
-                        </a>
-                    </td>
-                    <td>
-                        <span class="badge badge-success">{{ patron.loan_count }} times</span>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% else %}
-    <div class="empty-state">
-        <p>No data available</p>
+    <div class="text-center py-5">
+        <p class="fs-3 text-muted">No borrowing records in this category yet.</p>
     </div>
     {% endif %}
 </div>
 {% endblock %}
-
